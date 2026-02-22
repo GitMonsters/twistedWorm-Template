@@ -94,3 +94,8 @@ required-features = ["layers"]
 name = "contest"
 path = "contest.rs"
 required-features = ["layers"]
+
+[[bin]]
+name = "arc_eval"
+path = "arc_eval.rs"
+required-features = ["layers"]

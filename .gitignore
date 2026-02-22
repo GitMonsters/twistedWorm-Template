@@ -26,3 +26,6 @@ __pycache__/
 # RustyWorm runtime data
 .rustyworm/
 test_physics_properties_output.txt
+
+# ARC-AGI dataset (cloned separately)
+arc-data/
