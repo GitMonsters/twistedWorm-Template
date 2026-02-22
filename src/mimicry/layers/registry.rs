@@ -373,8 +373,8 @@ mod tests {
     fn test_registry_creation() {
         let registry = LayerRegistry::new();
         let stats = registry.stats();
-        assert_eq!(stats.total_layers, 7);
-        assert_eq!(stats.enabled_layers, 7); // All enabled by default
+        assert_eq!(stats.total_layers, 8);
+        assert_eq!(stats.enabled_layers, 8); // All enabled by default
         assert_eq!(stats.layers_with_handlers, 0);
     }
 
@@ -425,7 +425,7 @@ mod tests {
         registry.disable(Layer::CollaborativeLearning);
 
         let enabled = registry.enabled_layers();
-        assert_eq!(enabled.len(), 5);
+        assert_eq!(enabled.len(), 6);
         assert!(!enabled.contains(&Layer::ExternalApis));
         assert!(!enabled.contains(&Layer::CollaborativeLearning));
     }

@@ -125,6 +125,10 @@ impl EmergencePredictors {
                         (Layer::CrossDomain, Layer::GaiaConsciousness) => 0.75,
                         (Layer::BasePhysics, Layer::ExtendedPhysics) => 0.7,
                         (Layer::CollaborativeLearning, Layer::ExternalApis) => 0.65,
+                        (Layer::BasePhysics, Layer::PreCognitiveVisualization) => 0.78,
+                        (Layer::GaiaConsciousness, Layer::PreCognitiveVisualization) => 0.85,
+                        (Layer::CollaborativeLearning, Layer::PreCognitiveVisualization) => 0.7,
+                        (Layer::ExternalApis, Layer::PreCognitiveVisualization) => 0.65,
                         // Moderate synergies
                         _ if l1.can_bridge_to(*l2) => 0.5,
                         // Weak synergies
@@ -147,6 +151,10 @@ impl EmergencePredictors {
         weights.insert((Domain::Physics, Domain::Emergent), 0.8);
         weights.insert((Domain::Consciousness, Domain::Social), 0.65);
         weights.insert((Domain::Social, Domain::External), 0.6);
+        weights.insert((Domain::Physics, Domain::Visualization), 0.78);
+        weights.insert((Domain::Consciousness, Domain::Visualization), 0.8);
+        weights.insert((Domain::Social, Domain::Visualization), 0.7);
+        weights.insert((Domain::External, Domain::Visualization), 0.65);
 
         weights
     }

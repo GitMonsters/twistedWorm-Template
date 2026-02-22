@@ -249,22 +249,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
-name = "consciousness_experiments"
-version = "2.1.0"
-dependencies = [
- "base64 0.21.7",
- "chrono",
- "criterion",
- "mongodb",
- "pyo3",
- "rand 0.8.5",
- "reqwest",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
 name = "convert_case"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1707,6 +1691,22 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
+name = "rustyworm"
+version = "2.1.0"
+dependencies = [
+ "base64 0.21.7",
+ "chrono",
+ "criterion",
+ "mongodb",
+ "pyo3",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "uuid",
+]
 
 [[package]]
 name = "ryu"

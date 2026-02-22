@@ -1,4 +1,4 @@
-//! Layer definitions for the 7-Layer Multiplicative Integration System.
+//! Layer definitions for the 8-Layer Multiplicative Integration System.
 //!
 //! This module defines the core layer types and their states, enabling
 //! bidirectional information flow with multiplicative confidence amplification.
@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-/// The 7 layers of the multiplicative integration system.
+/// The 8 layers of the multiplicative integration system.
 ///
 /// Information flows bidirectionally between layers, with each layer
 /// both contributing to and receiving refinements from connected layers.
@@ -43,10 +43,17 @@ pub enum Layer {
     /// Layer 7: Real-time external APIs
     /// Handles: External validation, feedback loops
     ExternalApis,
+
+    /// Layer 8: Pre-Cognitive Visualization
+    /// Handles: Task-space simulation before action, outcome projection,
+    /// fidelity tracking, and pre-warming of downstream layer confidences.
+    /// This layer fires BEFORE the main forward pass, building a structural
+    /// model of the task and projecting what a successful output looks like.
+    PreCognitiveVisualization,
 }
 
 impl Layer {
-    /// Returns all layers in order from base to external.
+    /// Returns all layers in order from base to visualization.
     pub fn all() -> &'static [Layer] {
         &[
             Layer::BasePhysics,
@@ -56,10 +63,11 @@ impl Layer {
             Layer::MultilingualProcessing,
             Layer::CollaborativeLearning,
             Layer::ExternalApis,
+            Layer::PreCognitiveVisualization,
         ]
     }
 
-    /// Returns the layer number (1-7).
+    /// Returns the layer number (1-8).
     pub fn number(&self) -> u8 {
         match self {
             Layer::BasePhysics => 1,
@@ -69,6 +77,7 @@ impl Layer {
             Layer::MultilingualProcessing => 5,
             Layer::CollaborativeLearning => 6,
             Layer::ExternalApis => 7,
+            Layer::PreCognitiveVisualization => 8,
         }
     }
 
@@ -82,6 +91,7 @@ impl Layer {
             Layer::MultilingualProcessing => "Multilingual Processing",
             Layer::CollaborativeLearning => "Collaborative Learning",
             Layer::ExternalApis => "External APIs",
+            Layer::PreCognitiveVisualization => "Pre-Cognitive Visualization",
         }
     }
 
@@ -95,6 +105,7 @@ impl Layer {
             Layer::MultilingualProcessing => "perspective, translation",
             Layer::CollaborativeLearning => "amplification",
             Layer::ExternalApis => "feedback",
+            Layer::PreCognitiveVisualization => "simulation, outcome projection, fidelity tracking",
         }
     }
 
@@ -106,6 +117,7 @@ impl Layer {
                 Layer::CrossDomain,
                 Layer::GaiaConsciousness,
                 Layer::MultilingualProcessing,
+                Layer::PreCognitiveVisualization,
             ],
             Layer::ExtendedPhysics => {
                 vec![Layer::BasePhysics, Layer::CrossDomain, Layer::ExternalApis]
@@ -121,6 +133,7 @@ impl Layer {
                 Layer::CrossDomain,
                 Layer::MultilingualProcessing,
                 Layer::ExternalApis,
+                Layer::PreCognitiveVisualization,
             ],
             Layer::MultilingualProcessing => vec![
                 Layer::BasePhysics,
@@ -131,11 +144,19 @@ impl Layer {
                 Layer::CrossDomain,
                 Layer::MultilingualProcessing,
                 Layer::ExternalApis,
+                Layer::PreCognitiveVisualization,
             ],
             Layer::ExternalApis => vec![
                 Layer::ExtendedPhysics,
                 Layer::GaiaConsciousness,
                 Layer::CollaborativeLearning,
+                Layer::PreCognitiveVisualization,
+            ],
+            Layer::PreCognitiveVisualization => vec![
+                Layer::BasePhysics,
+                Layer::GaiaConsciousness,
+                Layer::CollaborativeLearning,
+                Layer::ExternalApis,
             ],
         }
     }
@@ -161,6 +182,7 @@ pub enum Domain {
     Social,
     External,
     Emergent,
+    Visualization,
 }
 
 impl Domain {
@@ -173,6 +195,7 @@ impl Domain {
             Domain::Social => Layer::CollaborativeLearning,
             Domain::External => Layer::ExternalApis,
             Domain::Emergent => Layer::CrossDomain,
+            Domain::Visualization => Layer::PreCognitiveVisualization,
         }
     }
 }
@@ -441,6 +464,7 @@ mod tests {
     fn test_layer_ordering() {
         assert_eq!(Layer::BasePhysics.number(), 1);
         assert_eq!(Layer::ExternalApis.number(), 7);
+        assert_eq!(Layer::PreCognitiveVisualization.number(), 8);
     }
 
     #[test]
@@ -486,6 +510,10 @@ mod tests {
         assert_eq!(
             Domain::Consciousness.primary_layer(),
             Layer::GaiaConsciousness
+        );
+        assert_eq!(
+            Domain::Visualization.primary_layer(),
+            Layer::PreCognitiveVisualization
         );
     }
 }

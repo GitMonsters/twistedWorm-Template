@@ -12,7 +12,7 @@
 // - Session-aware context prompt
 // =================================================================
 
-use consciousness_experiments::MimicryEngine;
+use rustyworm::MimicryEngine;
 use std::io::{self, BufRead, Write};
 
 // =================================================================

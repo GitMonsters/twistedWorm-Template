@@ -1,6 +1,6 @@
 //! Integration module for connecting LayerStack to MimicryEngine.
 //!
-//! This module provides the bridge between the 7-layer multiplicative system
+//! This module provides the bridge between the 8-layer multiplicative system
 //! and the existing dual-process MimicryEngine architecture.
 
 use super::bridges::BridgeBuilder;
@@ -8,7 +8,7 @@ use super::gaia::intuition::{GaiaConfig, GaiaIntuitionEngine};
 use super::layer::{Domain, Layer, LayerState};
 use super::stack::{LayerStack, LayerStackConfig, StackProcessResult};
 
-/// Integration layer connecting the 7-layer system to MimicryEngine.
+/// Integration layer connecting the 8-layer system to MimicryEngine.
 ///
 /// This struct wraps the LayerStack and provides convenience methods
 /// for processing mimicry inputs through the multiplicative amplification
@@ -37,6 +37,8 @@ pub struct IntegrationConfig {
     pub track_statistics: bool,
     /// Maximum processing time in milliseconds.
     pub max_processing_time_ms: u64,
+    /// Whether to enable Phase 3 subsystems (visualization, reserve, distribution resonance).
+    pub enable_phase3: bool,
 }
 
 impl Default for IntegrationConfig {
@@ -47,6 +49,7 @@ impl Default for IntegrationConfig {
             min_amplification_benefit: 0.05,
             track_statistics: true,
             max_processing_time_ms: 5000,
+            enable_phase3: false, // Phase 3 off by default for backward compat
         }
     }
 }
@@ -68,6 +71,10 @@ pub struct IntegrationStats {
     pub convergence_count: u64,
     /// Total amplification factor accumulated.
     pub total_amplification: f32,
+    /// Phase 3: Number of visualization passes.
+    pub visualization_passes: u64,
+    /// Phase 3: Total reserve burst events.
+    pub reserve_burst_events: u64,
 }
 
 /// Result of processing through the integration layer.
@@ -87,6 +94,12 @@ pub struct IntegrationResult {
     pub active_domains: Vec<Domain>,
     /// Processing time in milliseconds.
     pub processing_time_ms: u64,
+    /// Phase 3: Whether visualization pre-pass was active.
+    pub visualization_active: bool,
+    /// Phase 3: Visualization confidence (if active).
+    pub visualization_confidence: Option<f32>,
+    /// Phase 3: Whether any reserve bursts occurred.
+    pub reserve_bursts_occurred: bool,
 }
 
 impl LayerIntegration {
@@ -97,7 +110,13 @@ impl LayerIntegration {
 
     /// Create with custom configuration.
     pub fn with_config(config: IntegrationConfig) -> Self {
-        let mut stack = LayerStack::new();
+        let stack_config = if config.enable_phase3 {
+            LayerStackConfig::new().with_phase3()
+        } else {
+            LayerStackConfig::new()
+        };
+
+        let mut stack = LayerStack::with_config(stack_config);
 
         // Register all standard bridges
         let bridges = BridgeBuilder::build_all();
@@ -115,7 +134,14 @@ impl LayerIntegration {
 
     /// Create with custom stack configuration.
     pub fn with_stack_config(config: IntegrationConfig, stack_config: LayerStackConfig) -> Self {
-        let mut stack = LayerStack::with_config(stack_config);
+        let effective_stack_config = if config.enable_phase3 {
+            // Ensure Phase 3 flags are set even if caller forgot
+            stack_config.with_phase3()
+        } else {
+            stack_config
+        };
+
+        let mut stack = LayerStack::with_config(effective_stack_config);
 
         let bridges = BridgeBuilder::build_all();
         for bridge in bridges {
@@ -160,7 +186,7 @@ impl LayerIntegration {
         self.stats = IntegrationStats::default();
     }
 
-    /// Process an input through the full 7-layer system.
+    /// Process an input through the full 8-layer system.
     ///
     /// This is the main entry point for integrating with MimicryEngine.
     /// It takes a text input and optional context, processes through all
@@ -193,6 +219,18 @@ impl LayerIntegration {
             stack_result.combined_confidence
         };
 
+        // Phase 3: Extract visualization and reserve info
+        let visualization_active = stack_result.visualization.is_some();
+        let visualization_confidence = stack_result
+            .visualization
+            .as_ref()
+            .map(|v| v.visualization_confidence);
+        let reserve_bursts_occurred = !stack_result.reserve_decompositions.is_empty()
+            && stack_result
+                .reserve_decompositions
+                .values()
+                .any(|d| d.burst > 0.0);
+
         // Update statistics
         self.update_stats(
             initial_confidence,
@@ -200,6 +238,14 @@ impl LayerIntegration {
             &stack_result,
             gaia_contributed,
         );
+
+        // Phase 3: Update Phase 3 stats
+        if visualization_active {
+            self.stats.visualization_passes += 1;
+        }
+        if reserve_bursts_occurred {
+            self.stats.reserve_burst_events += 1;
+        }
 
         let processing_time_ms = start_time.elapsed().as_millis() as u64;
 
@@ -211,6 +257,9 @@ impl LayerIntegration {
             gaia_confidence,
             active_domains,
             processing_time_ms,
+            visualization_active,
+            visualization_confidence,
+            reserve_bursts_occurred,
         }
     }
 
@@ -245,12 +294,31 @@ impl LayerIntegration {
             stack_result.combined_confidence
         };
 
+        // Phase 3 info
+        let visualization_active = stack_result.visualization.is_some();
+        let visualization_confidence = stack_result
+            .visualization
+            .as_ref()
+            .map(|v| v.visualization_confidence);
+        let reserve_bursts_occurred = !stack_result.reserve_decompositions.is_empty()
+            && stack_result
+                .reserve_decompositions
+                .values()
+                .any(|d| d.burst > 0.0);
+
         self.update_stats(
             initial_confidence,
             final_confidence,
             &stack_result,
             gaia_contributed,
         );
+
+        if visualization_active {
+            self.stats.visualization_passes += 1;
+        }
+        if reserve_bursts_occurred {
+            self.stats.reserve_burst_events += 1;
+        }
 
         IntegrationResult {
             stack_result,
@@ -260,6 +328,9 @@ impl LayerIntegration {
             gaia_confidence,
             active_domains,
             processing_time_ms: start_time.elapsed().as_millis() as u64,
+            visualization_active,
+            visualization_confidence,
+            reserve_bursts_occurred,
         }
     }
 
@@ -340,6 +411,7 @@ impl LayerIntegration {
                 Layer::CollaborativeLearning => Domain::Social,
                 Layer::ExternalApis => Domain::External,
                 Layer::CrossDomain => Domain::Emergent,
+                Layer::PreCognitiveVisualization => Domain::Visualization,
             };
             if !domains.contains(&domain) {
                 domains.push(domain);
@@ -409,7 +481,9 @@ impl LayerIntegration {
              Avg confidence improvement: {:.2}%\n\
              Max confidence: {:.2}\n\
              Convergence rate: {:.1}%\n\
-             Total amplification: {:.2}x",
+             Total amplification: {:.2}x\n\
+             Phase 3 — Visualization passes: {}\n\
+             Phase 3 — Reserve burst events: {}",
             self.stats.total_processed,
             self.stats.gaia_invocations,
             self.stats.avg_confidence_improvement * 100.0,
@@ -423,7 +497,9 @@ impl LayerIntegration {
                 self.stats.total_amplification / self.stats.total_processed as f32
             } else {
                 1.0
-            }
+            },
+            self.stats.visualization_passes,
+            self.stats.reserve_burst_events,
         )
     }
 }

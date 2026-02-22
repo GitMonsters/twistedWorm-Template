@@ -1,4 +1,4 @@
-//! 7-Layer Multiplicative Integration System.
+//! 8-Layer Multiplicative Integration System.
 //!
 //! This module implements a bidirectional layer architecture that enables
 //! multiplicative confidence amplification across domains. Unlike additive
@@ -9,6 +9,9 @@
 //!
 //! ```text
 //! ┌────────────────────────────────────────────────┐
+//! │  Layer 8: Pre-Cognitive Visualization            │
+//! │  ↕ (simulation, outcome projection, fidelity)  │
+//! ├────────────────────────────────────────────────┤
 //! │  Layer 7: Real-Time External APIs              │
 //! │  ↕ (feedback)                                  │
 //! ├────────────────────────────────────────────────┤
@@ -83,14 +86,22 @@ pub mod layer;
 pub mod registry;
 pub mod stack;
 
+pub mod adaptive;
 pub mod amplification;
 pub mod bridges;
+// dead_code is allowed at the module level since metrics are opt-in for consumers
 pub mod compounding;
+pub mod distribution_resonance;
 pub mod domains;
 pub mod emergence;
 pub mod external;
 pub mod gaia;
 pub mod integration;
+#[allow(dead_code)]
+pub mod metrics;
+pub mod octo_braid;
+pub mod reserve;
+pub mod visualization;
 
 // Re-export primary types
 pub use bridge::{
@@ -109,9 +120,41 @@ pub use registry::{
 };
 pub use stack::{LayerStack, LayerStackConfig, StackProcessResult, StackStats};
 
+// Phase 3: New module re-exports
+pub use distribution_resonance::{
+    distribution_resonance, distribution_resonance_raw, ConfidenceDistribution,
+    DistributionResonanceConfig, DistributionResonanceSystem,
+};
+pub use reserve::{
+    ConfidenceDecomposition, FractionalReserve, LayerReserve, ReserveConfig, ReserveStats,
+};
+pub use visualization::{
+    EngineSummary, FidelityConfig, FidelityMeasurement, FidelityStats, FidelityTracker,
+    OutcomeProjection, OutcomeProjector, ProjectorConfig, SimulationResult, SimulatorConfig,
+    SubGoal, TaskSimulator, VisualizationConfig, VisualizationEngine, VisualizationResult,
+};
+
+// Phase 5: Adaptive systems
+pub use adaptive::{
+    AdaptiveCapConfig, AdaptiveConfidenceCap, BridgeWeight, DynamicBridgeWeighting,
+    DynamicWeightConfig, GlobalLearningState, LayerEffectiveness, OnlineLearningConfig,
+    OnlineLearningSystem,
+};
+
+// Phase 5D: Quality metrics
+pub use metrics::{
+    compare_quality, compute_quality, MetricsAnalyzer, QualityComparison, QualityDelta,
+    QualityMetrics, QualityMetricsConfig,
+};
+
+// Phase 6: OCTO Braiding
+pub use octo_braid::{BraidSignals, BraidStats, OctoBraid, OctoBraidConfig, PathwayEmphasis};
+
 /// Prelude module for convenient imports.
 pub mod prelude {
     pub use super::{
+        // Adaptive types (Phase 5)
+        AdaptiveConfidenceCap,
         AmplificationResult,
         BidirectionalBridge,
         BridgeConnection,
@@ -121,16 +164,22 @@ pub mod prelude {
         // Compounding types
         CompoundingAnalysis,
         CompoundingMetrics,
+        // Distribution resonance types
+        ConfidenceDistribution,
+        DistributionResonanceSystem,
         Domain,
         // Domain types
         DomainConfig,
         DomainFactory,
         DomainProcessor,
+        DynamicBridgeWeighting,
         // Emergence types
         EmergenceAnalysis,
         EmergenceFramework,
         EmergenceMechanism,
         FlowDirection,
+        // Reserve types
+        FractionalReserve,
         // Integration types
         IntegrationConfig,
         IntegrationResult,
@@ -145,7 +194,18 @@ pub mod prelude {
         LayerStack,
         LayerStackConfig,
         LayerState,
+        // Quality metrics (Phase 5D)
+        MetricsAnalyzer,
+        // Phase 6: OCTO Braiding
+        OctoBraid,
+        OctoBraidConfig,
+        OnlineLearningSystem,
+        QualityMetrics,
         StackProcessResult,
+        // Visualization types
+        VisualizationConfig,
+        VisualizationEngine,
+        VisualizationResult,
     };
 }
 
@@ -158,7 +218,9 @@ mod tests {
         // Verify all primary types are accessible
         let _ = Layer::BasePhysics;
         let _ = Layer::GaiaConsciousness;
+        let _ = Layer::PreCognitiveVisualization;
         let _ = Domain::Physics;
+        let _ = Domain::Visualization;
         let _ = FlowDirection::Forward;
     }
 
@@ -178,7 +240,7 @@ mod tests {
     #[test]
     fn test_registry_creation() {
         let registry = LayerRegistry::new();
-        assert_eq!(registry.stats().total_layers, 7);
+        assert_eq!(registry.stats().total_layers, 8);
     }
 
     #[test]

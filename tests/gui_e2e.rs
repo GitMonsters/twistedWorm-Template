@@ -14,7 +14,7 @@
 
 #![cfg(feature = "gui")]
 
-use consciousness_experiments::mimicry::{
+use rustyworm::mimicry::{
     gui_agent::{GuiAction, GuiError, NormalizedPoint, Platform, SwipeDirection, TaskStatus},
     gui_bridge::{GuiBridge, GuiBridgeConfig, GuiConversation, Language},
     platforms::{DeviceManager, PlatformFactory},

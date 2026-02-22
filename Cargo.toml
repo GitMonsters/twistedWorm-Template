@@ -1,5 +1,5 @@
 [package]
-name = "consciousness_experiments"
+name = "rustyworm"
 version = "2.1.0"
 edition = "2021"
 description = "RustyWorm: Universal AI Mimicry Engine with Dual-Process Architecture"
@@ -22,7 +22,7 @@ exclude = [
 ]
 
 [lib]
-name = "consciousness_experiments"
+name = "rustyworm"
 path = "src/lib.rs"
 
 [dependencies]
@@ -88,4 +88,9 @@ path = "prime_directive.rs"
 [[bin]]
 name = "demo_layers"
 path = "demo_layers.rs"
+required-features = ["layers"]
+
+[[bin]]
+name = "contest"
+path = "contest.rs"
 required-features = ["layers"]

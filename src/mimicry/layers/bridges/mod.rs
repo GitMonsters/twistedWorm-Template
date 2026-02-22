@@ -1,7 +1,7 @@
 //! Inter-layer bridge implementations.
 //!
 //! This module contains concrete implementations of bidirectional bridges
-//! that connect the 7 layers of the multiplicative integration system.
+//! that connect the 8 layers of the multiplicative integration system.
 
 pub mod base_extended;
 pub mod collaborative_external;
@@ -14,6 +14,10 @@ pub mod internal_external;
 pub mod language_collaborative;
 pub mod physics_consciousness;
 pub mod physics_language;
+pub mod visualization_base;
+pub mod visualization_collaborative;
+pub mod visualization_consciousness;
+pub mod visualization_external;
 
 // Re-export bridge implementations
 pub use base_extended::BaseExtendedBridge;
@@ -27,6 +31,10 @@ pub use internal_external::InternalExternalBridge;
 pub use language_collaborative::LanguageCollaborativeBridge;
 pub use physics_consciousness::PhysicsConsciousnessBridge;
 pub use physics_language::PhysicsLanguageBridge;
+pub use visualization_base::VisualizationBaseBridge;
+pub use visualization_collaborative::VisualizationCollaborativeBridge;
+pub use visualization_consciousness::VisualizationConsciousnessBridge;
+pub use visualization_external::VisualizationExternalBridge;
 
 use super::{BidirectionalBridge, BridgeNetwork};
 use std::sync::Arc;
@@ -35,13 +43,15 @@ use std::sync::Arc;
 pub fn create_default_bridge_network() -> BridgeNetwork {
     let mut network = BridgeNetwork::new();
 
-    // Register all bridges
+    // Register default bridges (8 total: 7 original + visualization-external)
     network.register(Arc::new(BaseExtendedBridge::new()));
     network.register(Arc::new(CrossDomainBridge::new()));
     network.register(Arc::new(PhysicsConsciousnessBridge::new()));
     network.register(Arc::new(PhysicsLanguageBridge::new()));
     network.register(Arc::new(IndividualCollectiveBridge::new()));
     network.register(Arc::new(InternalExternalBridge::new()));
+    network.register(Arc::new(VisualizationExternalBridge::new()));
+    network.register(Arc::new(VisualizationBaseBridge::new()));
 
     network
 }
@@ -134,7 +144,34 @@ impl BridgeBuilder {
         self
     }
 
-    /// Add all standard bridges (original 6).
+    /// Add the visualization-external bridge (L7↔L8).
+    pub fn with_visualization_external(mut self) -> Self {
+        self.bridges
+            .push(Arc::new(VisualizationExternalBridge::new()));
+        self
+    }
+
+    /// Add the visualization-consciousness bridge (L4↔L8).
+    pub fn with_visualization_consciousness(mut self) -> Self {
+        self.bridges
+            .push(Arc::new(VisualizationConsciousnessBridge::new()));
+        self
+    }
+
+    /// Add the visualization-collaborative bridge (L6↔L8).
+    pub fn with_visualization_collaborative(mut self) -> Self {
+        self.bridges
+            .push(Arc::new(VisualizationCollaborativeBridge::new()));
+        self
+    }
+
+    /// Add the visualization-base bridge (L8↔L1).
+    pub fn with_visualization_base(mut self) -> Self {
+        self.bridges.push(Arc::new(VisualizationBaseBridge::new()));
+        self
+    }
+
+    /// Add all standard bridges (8 total, including visualization-external and visualization-base).
     pub fn with_all_bridges(self) -> Self {
         self.with_base_extended()
             .with_cross_domain()
@@ -142,9 +179,11 @@ impl BridgeBuilder {
             .with_physics_language()
             .with_individual_collective()
             .with_internal_external()
+            .with_visualization_external()
+            .with_visualization_base()
     }
 
-    /// Add all bridges including extended bridges (11 total).
+    /// Add all bridges including extended bridges (15 total).
     pub fn with_all_extended_bridges(self) -> Self {
         self.with_all_bridges()
             .with_consciousness_language()
@@ -152,6 +191,8 @@ impl BridgeBuilder {
             .with_collaborative_external()
             .with_crossdomain_consciousness()
             .with_consciousness_external()
+            .with_visualization_consciousness()
+            .with_visualization_collaborative()
     }
 
     /// Build all standard bridges and return as a vector.
@@ -168,6 +209,10 @@ impl BridgeBuilder {
             Arc::new(CollaborativeExternalBridge::new()),
             Arc::new(CrossDomainConsciousnessBridge::new()),
             Arc::new(ConsciousnessExternalBridge::new()),
+            Arc::new(VisualizationExternalBridge::new()),
+            Arc::new(VisualizationConsciousnessBridge::new()),
+            Arc::new(VisualizationCollaborativeBridge::new()),
+            Arc::new(VisualizationBaseBridge::new()),
         ]
     }
 
@@ -209,19 +254,19 @@ mod tests {
     #[test]
     fn test_default_bridge_network() {
         let network = create_default_bridge_network();
-        assert_eq!(network.bridges().len(), 6);
+        assert_eq!(network.bridges().len(), 8);
     }
 
     #[test]
     fn test_extended_bridge_network() {
         let network = BridgeBuilder::new().with_all_extended_bridges().build();
-        assert_eq!(network.bridges().len(), 11);
+        assert_eq!(network.bridges().len(), 15);
     }
 
     #[test]
     fn test_build_all() {
         let bridges = BridgeBuilder::build_all();
-        assert_eq!(bridges.len(), 11);
+        assert_eq!(bridges.len(), 15);
     }
 
     #[test]
@@ -239,6 +284,6 @@ mod tests {
     #[test]
     fn test_builder_all_bridges() {
         let network = BridgeBuilder::new().with_all_bridges().build();
-        assert_eq!(network.bridges().len(), 6);
+        assert_eq!(network.bridges().len(), 8);
     }
 }

@@ -13,10 +13,10 @@
 //! cargo run --features rl --example rl_enhanced_evolution
 //! ```
 
-use consciousness_experiments::mimicry::{engine::MimicryEngine, profile::AiProfile};
+use rustyworm::mimicry::{engine::MimicryEngine, profile::AiProfile};
 
 #[cfg(feature = "rl")]
-use consciousness_experiments::mimicry::{
+use rustyworm::mimicry::{
     rl_config::{RLAlgorithm, RLConfig, RewardShaping},
     rl_optimizer::{RLOptimizationRequest, ReinforcementLearningOptimizer, TrajectoryStep},
 };

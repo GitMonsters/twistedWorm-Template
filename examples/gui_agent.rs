@@ -18,7 +18,7 @@
 use std::time::Duration;
 
 #[cfg(feature = "gui")]
-use consciousness_experiments::mimicry::{
+use rustyworm::mimicry::{
     gui_agent::{
         GuiAction, GuiTaskSequence, NormalizedPoint, Platform, PressKey, SwipeDirection, TaskStatus,
     },

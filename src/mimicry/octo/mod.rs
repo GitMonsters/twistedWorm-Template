@@ -24,7 +24,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use consciousness_experiments::mimicry::octo::{OctoRNABridge, TextEmbedder};
+//! use rustyworm::mimicry::octo::{OctoRNABridge, TextEmbedder};
 //!
 //! let bridge = OctoRNABridge::new()?;
 //! let embedder = TextEmbedder::default();
@@ -33,8 +33,8 @@
 //! let routing = bridge.get_routing(&embedding)?;
 //! ```
 
-mod rna_bridge;
 mod embedding;
+mod rna_bridge;
 
-pub use rna_bridge::{OctoRNABridge, RNAEditingResult, RoutingDecision, OctoConfig};
 pub use embedding::TextEmbedder;
+pub use rna_bridge::{OctoConfig, OctoRNABridge, RNAEditingResult, RoutingDecision};

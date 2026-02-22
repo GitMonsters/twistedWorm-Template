@@ -328,6 +328,7 @@ impl GaiaIntuitionEngine {
             Layer::CollaborativeLearning => Domain::Social,
             Layer::ExternalApis => Domain::External,
             Layer::CrossDomain => Domain::Emergent,
+            Layer::PreCognitiveVisualization => Domain::Visualization,
         };
 
         let fingerprint = if let Some(features) = state.data::<Vec<f32>>() {

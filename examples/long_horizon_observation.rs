@@ -11,10 +11,10 @@
 //! cargo run --features agentdock --example long_horizon_observation
 //! ```
 
-use consciousness_experiments::mimicry::engine::MimicryEngine;
+use rustyworm::mimicry::engine::MimicryEngine;
 
 #[cfg(feature = "agentdock")]
-use consciousness_experiments::mimicry::long_horizon::{
+use rustyworm::mimicry::long_horizon::{
     ContextWindow, LongHorizonConfig, LongHorizonObserver, PatternType, StrategyAdjustment,
 };
 

@@ -5,7 +5,7 @@
 // Now imports from shared consciousness module.
 // =================================================================
 
-use consciousness_experiments::consciousness::*;
+use rustyworm::consciousness::*;
 
 // =================================================================
 // MAIN - DEMONSTRATION

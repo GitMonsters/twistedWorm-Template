@@ -11,10 +11,10 @@
 //! cargo run --features agentdock --example benchmarking
 //! ```
 
-use consciousness_experiments::mimicry::engine::MimicryEngine;
+use rustyworm::mimicry::engine::MimicryEngine;
 
 #[cfg(feature = "agentdock")]
-use consciousness_experiments::mimicry::benchmarking::{
+use rustyworm::mimicry::benchmarking::{
     BenchmarkConfig, BenchmarkResult, BenchmarkRunner, BenchmarkSuite, MetricType, TaskResult,
 };
 

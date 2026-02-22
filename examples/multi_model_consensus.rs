@@ -11,10 +11,10 @@
 //! cargo run --features agentdock --example multi_model_consensus
 //! ```
 
-use consciousness_experiments::mimicry::engine::MimicryEngine;
+use rustyworm::mimicry::engine::MimicryEngine;
 
 #[cfg(feature = "agentdock")]
-use consciousness_experiments::mimicry::multi_model::{
+use rustyworm::mimicry::multi_model::{
     AggregationStrategy, ConsensusConfig, ConsensusResult, ModelEndpoint, ModelWeight,
     MultiModelObserver,
 };
