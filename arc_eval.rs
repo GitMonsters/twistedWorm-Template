@@ -1,5 +1,5 @@
-// ARC-AGI Evaluation Binary for RustyWorm
-// Evaluates the 8-layer multiplicative integration system against ARC-AGI tasks
+// ARC-AGI-2 Evaluation Binary for RustyWorm
+// Evaluates the 8-layer multiplicative integration system against ARC-AGI-2 tasks
 //
 // Usage:
 //   cargo run --features layers --bin arc_eval -- [OPTIONS]
@@ -10,7 +10,7 @@
 //   --task <id>          Run a single task by ID (e.g. 007bbfb7)
 //   --limit <n>          Max tasks to evaluate (default: all)
 //   --verbose            Print detailed per-task output
-//   --trials <n>         Max trials per test input (default: 3, per ARC rules)
+//   --trials <n>         Max trials per test input (default: 2, per ARC-AGI-2 rules)
 
 #[cfg(feature = "layers")]
 mod arc {
@@ -1130,7 +1130,7 @@ mod arc {
         };
 
         println!("================================================================");
-        println!("     RustyWorm ARC-AGI EVALUATION");
+        println!("     RustyWorm ARC-AGI-2 EVALUATION");
         println!("================================================================");
         println!(
             "  Split: {}  |  Tasks: {}  |  Trials: {}",
@@ -1319,7 +1319,7 @@ mod arc {
         let mut single_task: Option<String> = None;
         let mut limit: Option<usize> = None;
         let mut verbose = false;
-        let mut max_trials = 3;
+        let mut max_trials = 2;
 
         let mut i = 1;
         while i < args.len() {
@@ -1357,7 +1357,7 @@ mod arc {
                     println!("  --split <split>    training | evaluation (default: training)");
                     println!("  --task <id>        Run a single task by ID (e.g. 007bbfb7)");
                     println!("  --limit <n>        Max tasks to evaluate");
-                    println!("  --trials <n>       Max trials per test input (default: 3)");
+                    println!("  --trials <n>       Max trials per test input (default: 2)");
                     println!("  --verbose, -v      Print detailed per-task output");
                     println!("  --help, -h         Show this help");
                     return;
