@@ -19,7 +19,9 @@ mod arc {
     use serde::{Deserialize, Serialize};
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::fs;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
     use std::time::Instant;
 
     // ═══════════════════════════════════════════════════════════════════
@@ -826,6 +828,112 @@ mod arc {
         pub pre_cognitive: f32,      // L8: outcome prediction confidence
     }
 
+    /// Encode layer confidences for a specific candidate (braid-aware, per-candidate).
+    pub fn encode_candidate_confidences(
+        task: &ArcTask,
+        candidate: &TransformCandidate,
+        all_candidates: &[TransformCandidate],
+    ) -> LayerConfidences {
+        // Use this candidate's accuracy as the primary signal
+        let cand_conf = candidate.confidence;
+        let best_conf = all_candidates.first().map(|c| c.confidence).unwrap_or(0.0);
+        let num_perfect = all_candidates.iter().filter(|c| c.confidence >= 1.0).count();
+        let num_candidates = all_candidates.len();
+
+        let train_features: Vec<_> = task
+            .train
+            .iter()
+            .map(|p| (analyze_grid(&p.input), analyze_grid(&p.output)))
+            .collect();
+
+        let avg_symmetry: f32 = train_features
+            .iter()
+            .map(|(inf, _)| {
+                let s = &inf.symmetry;
+                let count = [s.horizontal, s.vertical, s.diagonal, s.rotational_90]
+                    .iter()
+                    .filter(|&&x| x)
+                    .count();
+                count as f32 / 4.0
+            })
+            .sum::<f32>()
+            / train_features.len().max(1) as f32;
+
+        let size_consistent = train_features.windows(2).all(|w| {
+            let r0 = (
+                w[0].1.height as f32 / w[0].0.height.max(1) as f32,
+                w[0].1.width as f32 / w[0].0.width.max(1) as f32,
+            );
+            let r1 = (
+                w[1].1.height as f32 / w[1].0.height.max(1) as f32,
+                w[1].1.width as f32 / w[1].0.width.max(1) as f32,
+            );
+            (r0.0 - r1.0).abs() < 0.01 && (r0.1 - r1.1).abs() < 0.01
+        });
+
+        // L1: structural regularity + this candidate's training accuracy
+        let base_physics = (0.2 + avg_symmetry * 0.3 + cand_conf * 0.5).min(1.0);
+
+        // L2: transformation complexity — perfect candidate = simple transform
+        let extended_physics = if cand_conf >= 1.0 {
+            0.95
+        } else if cand_conf > 0.5 {
+            0.6 + cand_conf * 0.3
+        } else {
+            cand_conf * 0.6
+        };
+
+        // L3: cross-domain consistency weighted by candidate quality
+        let cross_domain = if size_consistent { 0.75 } else { 0.35 } + cand_conf * 0.25;
+
+        // L4: pattern intuition — how unique/confident is this candidate vs others
+        let rank_factor = if best_conf > 0.0 { cand_conf / best_conf } else { 0.0 };
+        let color_consistency = train_features
+            .windows(2)
+            .all(|w| w[0].0.colors == w[1].0.colors);
+        let gaia_consciousness =
+            (if color_consistency { 0.5 } else { 0.2 } + rank_factor * 0.4 + cand_conf * 0.1)
+                .min(1.0);
+
+        // L5: diversity of representations
+        let avg_colors: f32 = train_features
+            .iter()
+            .map(|(inf, _)| inf.colors.len() as f32)
+            .sum::<f32>()
+            / train_features.len().max(1) as f32;
+        let multilingual = (avg_colors / 10.0).min(1.0) * 0.4 + cand_conf * 0.4 + 0.1;
+
+        // L6: agreement — does this candidate agree across all training pairs?
+        let collaborative = if cand_conf >= 1.0 {
+            0.9
+        } else {
+            0.3 + cand_conf * 0.6
+        };
+
+        // L7: external validation — how many candidates at full confidence?
+        let external_apis = if cand_conf >= 1.0 {
+            0.85 + (num_perfect as f32 / 20.0).min(0.15)
+        } else if num_candidates > 0 {
+            0.25 + cand_conf * 0.4
+        } else {
+            0.1
+        };
+
+        // L8: pre-cognitive outcome prediction — direct candidate confidence
+        let pre_cognitive = cand_conf * 0.8 + if cand_conf >= 1.0 { 0.2 } else { 0.0 };
+
+        LayerConfidences {
+            base_physics: base_physics.min(1.0),
+            extended_physics: extended_physics.min(1.0),
+            cross_domain: cross_domain.min(1.0),
+            gaia_consciousness: gaia_consciousness.min(1.0),
+            multilingual: multilingual.min(1.0),
+            collaborative: collaborative.min(1.0),
+            external_apis: external_apis.min(1.0),
+            pre_cognitive: pre_cognitive.min(1.0),
+        }
+    }
+
     pub fn encode_task_to_confidences(
         task: &ArcTask,
         candidates: &[TransformCandidate],
@@ -930,6 +1038,7 @@ mod arc {
 
     pub struct ArcSolver {
         stack: LayerStack,
+        ttt_bridge: Option<TTTBridge>,
     }
 
     impl ArcSolver {
@@ -952,51 +1061,160 @@ mod arc {
                 stack.register_bridge(bridge.clone());
             }
 
-            ArcSolver { stack }
+            ArcSolver {
+                stack,
+                ttt_bridge: None,
+            }
         }
 
-        pub fn solve(&mut self, task: &ArcTask, max_trials: usize) -> Vec<(Grid, f32)> {
+        pub fn with_ttt(mut self, script_path: PathBuf) -> Self {
+            self.ttt_bridge = Some(TTTBridge::new(script_path));
+            self
+        }
+
+        pub fn solve(
+            &mut self,
+            task: &ArcTask,
+            max_trials: usize,
+            task_json: Option<&serde_json::Value>,
+            verbose: bool,
+        ) -> Vec<(Grid, f32)> {
             // 1. Detect candidate transforms
             let candidates = detect_transforms(task);
 
-            // 2. Encode task features into layer confidences
-            let confidences = encode_task_to_confidences(task, &candidates);
-
-            // 3. Set difficulty hint based on best candidate confidence
-            let best_conf = candidates.first().map(|c| c.confidence).unwrap_or(0.0);
-            let difficulty = if best_conf >= 1.0 {
-                0.2
-            } else if best_conf > 0.5 {
-                0.5
-            } else {
-                0.8
-            };
-            self.stack.set_difficulty_hint(Some(difficulty));
-
-            // 4. Process through layer system for each test input
+            // 2. Process through layer system — OCTO Braid scores each candidate individually
             let mut all_results = Vec::new();
 
-            for test_pair in &task.test {
+            for (test_idx, test_pair) in task.test.iter().enumerate() {
                 let mut trial_results: Vec<(Grid, f32)> = Vec::new();
 
-                // Generate candidate outputs for this test input
+                // Generate candidate outputs — OCTO Braid scores each candidate individually
                 for candidate in candidates.iter().take(max_trials.max(3)) {
                     if let Some(output) = apply_transform(&test_pair.input, &candidate.transform) {
-                        // Run through layer system to get confidence score
+
+                        // Per-candidate difficulty: perfect match = easy for braid,
+                        // partial match = hard — braid restricts cap accordingly
+                        let cand_difficulty = if candidate.confidence >= 1.0 {
+                            0.1
+                        } else if candidate.confidence > 0.75 {
+                            0.3
+                        } else if candidate.confidence > 0.5 {
+                            0.5
+                        } else {
+                            0.75 + (0.5 - candidate.confidence).max(0.0) * 0.4
+                        };
+                        self.stack.set_difficulty_hint(Some(cand_difficulty));
+
+                        // Seed all 8 layers with per-candidate confidences
+                        let cand_confidences = encode_candidate_confidences(
+                            task, candidate, &candidates,
+                        );
+
                         let input_state = LayerState::with_confidence(
                             Layer::BasePhysics,
-                            confidences.clone(),
-                            confidences.base_physics,
+                            cand_confidences.clone(),
+                            cand_confidences.base_physics,
                         );
 
                         self.stack.clear_states();
                         let result = self.stack.process_bidirectional(input_state);
 
-                        // Combined score: transform training accuracy + layer system confidence
-                        let layer_conf = result.combined_confidence / 2.0; // normalize from [0,2] to [0,1]
-                        let combined_score = candidate.confidence * 0.7 + layer_conf * 0.3;
+                        // Extract live braid signals for this candidate
+                        let braid = self.stack.octo_braid()
+                            .map(|b| b.last_signals().clone())
+                            .unwrap_or_default();
+
+                        if verbose {
+                            eprintln!(
+                                "      braid: cap={:.3} temp={:.3} sys2={} diff={:.2} | cand_conf={:.3}",
+                                braid.effective_cap,
+                                braid.temperature,
+                                braid.system2_active,
+                                cand_difficulty,
+                                candidate.confidence,
+                            );
+                        }
+
+                        // OCTO Braid-driven score:
+                        // effective_cap  → how much the braid trusts this candidate (normalized [0,1])
+                        // temperature    → uncertainty penalty (lower = better)
+                        // system2_active → extra scrutiny flag (slight penalty)
+                        // combined_confidence → layer stack's multiplicative amplification signal
+                        let braid_cap_score = braid.effective_cap / 2.0;
+                        let temp_penalty = 1.0 / (1.0 + braid.temperature * 0.3);
+                        let sys2_penalty = if braid.system2_active { 0.9 } else { 1.0 };
+                        let layer_score = (result.combined_confidence / 2.0).min(1.0);
+
+                        // Primary: candidate training accuracy (ground truth)
+                        // Secondary: braid cap × temp × sys2 (live OCTO signal)
+                        // Tertiary: layer stack multiplicative output
+                        let combined_score = candidate.confidence * 0.55
+                            + braid_cap_score * temp_penalty * sys2_penalty * 0.30
+                            + layer_score * 0.15;
 
                         trial_results.push((output, combined_score));
+                    }
+                }
+
+                // 5. TTT FALLBACK — If brute-force didn't find a perfect match,
+                //    use the LLM TTT solver with OCTO Braid signal integration.
+                let brute_force_perfect = trial_results
+                    .first()
+                    .map(|(_, score)| *score >= 0.99)
+                    .unwrap_or(false);
+
+                if !brute_force_perfect {
+                    if let Some(ref ttt_bridge) = self.ttt_bridge {
+                        if let Some(task_json) = task_json {
+                            if verbose {
+                                eprintln!(
+                                    "    TTT: Brute-force best={:.3}, invoking LLM solver...",
+                                    trial_results.first().map(|(_, s)| *s).unwrap_or(0.0)
+                                );
+                            }
+
+                            // Extract current braid signals from stack
+                            let braid_signals = TTTBridge::extract_braid_signals(&self.stack);
+
+                            // Call TTT solver subprocess
+                            if let Some((ttt_grids, ttt_conf, feedback)) =
+                                ttt_bridge.solve_test(task_json, test_idx, braid_signals, verbose)
+                            {
+                                // Feed braid feedback back into the layer stack
+                                TTTBridge::apply_feedback_to_stack(&mut self.stack, &feedback);
+
+                                // Re-process through layer system with updated braid state
+                                let ttt_input_state = LayerState::with_confidence(
+                                    Layer::BasePhysics,
+                                    ttt_conf as f32,
+                                    // TTT confidence drives the input seed
+                                    ttt_conf as f32 * 0.9,
+                                );
+                                self.stack.clear_states();
+                                let ttt_result = self.stack.process_bidirectional(ttt_input_state);
+                                let ttt_layer_conf = ttt_result.combined_confidence / 2.0;
+
+                                // Score TTT predictions using combined TTT + layer confidence
+                                for (i, grid) in ttt_grids.into_iter().enumerate() {
+                                    // First TTT prediction gets full confidence, subsequent get less
+                                    let rank_penalty = 1.0 / (1.0 + i as f32 * 0.3);
+                                    let ttt_score = (ttt_conf as f32 * 0.5
+                                        + ttt_layer_conf * 0.3
+                                        + 0.2) // base bonus for attempting TTT
+                                        * rank_penalty;
+
+                                    trial_results.push((grid, ttt_score));
+                                }
+
+                                if verbose {
+                                    eprintln!(
+                                        "    TTT: Added {} predictions, braid feedback applied (difficulty={:.3})",
+                                        ttt_conf,
+                                        1.0 - feedback.ttt_confidence as f32
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1017,6 +1235,244 @@ mod arc {
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // § 7.5  TTT BRIDGE — Subprocess integration with Python LLM solver
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Serializable braid signals to pass to the Python TTT solver.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct TTTBraidSignals {
+        temperature: f32,
+        cap_aggressiveness: f32,
+        resonance_sensitivity: f32,
+        global_damping: f32,
+        system2_active: bool,
+    }
+
+    /// Request sent to ttt_solver.py via stdin.
+    #[derive(Debug, Clone, Serialize)]
+    struct TTTRequest {
+        task: serde_json::Value, // raw ARC task JSON
+        test_index: usize,
+        config: TTTConfig,
+        braid_signals: TTTBraidSignals,
+    }
+
+    /// Config for the TTT solver.
+    #[derive(Debug, Clone, Serialize)]
+    struct TTTConfig {
+        max_refinement_iters: usize,
+        max_tokens: usize,
+        temperature: f32,
+        enable_airv: bool,
+        enable_self_check: bool,
+        max_augmentations: usize,
+    }
+
+    /// Response from ttt_solver.py via stdout.
+    #[derive(Debug, Clone, Deserialize)]
+    struct TTTResponse {
+        predictions: Vec<Vec<Vec<u8>>>,
+        confidence: f64,
+        reasoning: String,
+        augmentations_used: usize,
+        refinement_iterations: usize,
+        braid_signals: TTTBraidFeedback,
+        elapsed_ms: f64,
+    }
+
+    /// Braid feedback signals returned from TTT solver.
+    #[derive(Debug, Clone, Deserialize)]
+    struct TTTBraidFeedback {
+        ttt_confidence: f64,
+        ttt_temperature: f64,
+        ttt_augmentations: usize,
+        ttt_refinements: usize,
+        ttt_predictions_count: usize,
+        ttt_agreement: f64,
+        ttt_elapsed_ms: f64,
+        suggested_reserve_scale: f64,
+        suggested_cap: f64,
+        suggested_system2: bool,
+    }
+
+    /// Bridge to the Python TTT solver subprocess.
+    pub struct TTTBridge {
+        python_path: String,
+        script_path: PathBuf,
+        enable_airv: bool,
+        max_refinement_iters: usize,
+    }
+
+    impl TTTBridge {
+        pub fn new(script_path: PathBuf) -> Self {
+            TTTBridge {
+                python_path: "/usr/local/bin/python3".to_string(),
+                script_path,
+                enable_airv: true,
+                max_refinement_iters: 2,
+            }
+        }
+
+        /// Extract current braid signals from the LayerStack.
+        fn extract_braid_signals(stack: &LayerStack) -> TTTBraidSignals {
+            if let Some(braid) = stack.octo_braid() {
+                let signals = braid.last_signals();
+                TTTBraidSignals {
+                    temperature: signals.temperature,
+                    cap_aggressiveness: signals.cap_aggressiveness,
+                    resonance_sensitivity: signals.resonance_sensitivity,
+                    global_damping: signals.global_damping,
+                    system2_active: signals.system2_active,
+                }
+            } else {
+                // Default signals when braid is not active
+                TTTBraidSignals {
+                    temperature: 0.3,
+                    cap_aggressiveness: 1.0,
+                    resonance_sensitivity: 1.0,
+                    global_damping: 0.8,
+                    system2_active: true,
+                }
+            }
+        }
+
+        /// Call the TTT solver for a specific test input.
+        /// Returns (predictions, confidence, braid_feedback).
+        fn solve_test(
+            &self,
+            task_json: &serde_json::Value,
+            test_index: usize,
+            braid_signals: TTTBraidSignals,
+            verbose: bool,
+        ) -> Option<(Vec<Grid>, f64, TTTBraidFeedback)> {
+            let config = TTTConfig {
+                max_refinement_iters: self.max_refinement_iters,
+                max_tokens: 1024,
+                temperature: braid_signals.temperature * 0.3, // scale down for LLM
+                enable_airv: self.enable_airv && braid_signals.system2_active,
+                enable_self_check: braid_signals.system2_active,
+                max_augmentations: (4.0 * braid_signals.resonance_sensitivity) as usize,
+            };
+
+            let request = TTTRequest {
+                task: task_json.clone(),
+                test_index,
+                config,
+                braid_signals,
+            };
+
+            let request_json = match serde_json::to_string(&request) {
+                Ok(j) => j,
+                Err(e) => {
+                    if verbose {
+                        eprintln!("    TTT: Failed to serialize request: {}", e);
+                    }
+                    return None;
+                }
+            };
+
+            // Spawn Python subprocess
+            let start = Instant::now();
+            let mut child = match Command::new(&self.python_path)
+                .arg(&self.script_path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    if verbose {
+                        eprintln!("    TTT: Failed to spawn Python: {}", e);
+                    }
+                    return None;
+                }
+            };
+
+            // Write request to stdin
+            if let Some(ref mut stdin) = child.stdin {
+                if stdin.write_all(request_json.as_bytes()).is_err() {
+                    if verbose {
+                        eprintln!("    TTT: Failed to write to stdin");
+                    }
+                    return None;
+                }
+            }
+            // Drop stdin to signal EOF
+            drop(child.stdin.take());
+
+            // Wait for result (with timeout — model loading can be slow)
+            let output = match child.wait_with_output() {
+                Ok(o) => o,
+                Err(e) => {
+                    if verbose {
+                        eprintln!("    TTT: Subprocess error: {}", e);
+                    }
+                    return None;
+                }
+            };
+
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+
+            if !output.status.success() {
+                if verbose {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!("    TTT: Process exited with error: {}", stderr);
+                }
+                return None;
+            }
+
+            // Parse response
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let response: TTTResponse = match serde_json::from_str(&stdout) {
+                Ok(r) => r,
+                Err(e) => {
+                    if verbose {
+                        eprintln!(
+                            "    TTT: Failed to parse response: {} (raw: {})",
+                            e,
+                            &stdout[..stdout.len().min(200)]
+                        );
+                    }
+                    return None;
+                }
+            };
+
+            if verbose {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.is_empty() {
+                    eprintln!("    TTT stderr: {}", stderr.trim());
+                }
+                eprintln!(
+                    "    TTT: {} predictions, confidence={:.3}, airv={}, refinements={}, {:.0}ms",
+                    response.predictions.len(),
+                    response.confidence,
+                    response.augmentations_used,
+                    response.refinement_iterations,
+                    elapsed
+                );
+            }
+
+            if response.predictions.is_empty() {
+                return None;
+            }
+
+            // Convert predictions (Vec<Vec<u8>> → Grid)
+            let grids: Vec<Grid> = response.predictions;
+
+            Some((grids, response.confidence, response.braid_signals))
+        }
+
+        /// Feed TTT braid feedback back into the LayerStack.
+        fn apply_feedback_to_stack(stack: &mut LayerStack, feedback: &TTTBraidFeedback) {
+            // Use TTT confidence to adjust difficulty hint
+            // Low TTT confidence → harder task → increase difficulty
+            let new_difficulty = 1.0 - feedback.ttt_confidence as f32;
+            stack.set_difficulty_hint(Some(new_difficulty.clamp(0.1, 0.95)));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // § 8  EVALUATION HARNESS
     // ═══════════════════════════════════════════════════════════════════
 
@@ -1024,12 +1480,13 @@ mod arc {
         solver: &mut ArcSolver,
         task_id: &str,
         task: &ArcTask,
+        task_json: Option<&serde_json::Value>,
         max_trials: usize,
         verbose: bool,
     ) -> TaskResult {
         let start = Instant::now();
 
-        let predictions = solver.solve(task, max_trials);
+        let predictions = solver.solve(task, max_trials, task_json, verbose);
 
         let mut correct = 0;
         let mut total = 0;
@@ -1117,9 +1574,23 @@ mod arc {
         single_task: Option<&str>,
         max_trials: usize,
         verbose: bool,
+        enable_ttt: bool,
     ) -> Result<EvalSummary, String> {
         let tasks = load_tasks(data_dir, split)?;
-        let mut solver = ArcSolver::new();
+        let solver_base = ArcSolver::new();
+        let mut solver = if enable_ttt {
+            // Look for ttt_solver.py relative to the binary
+            let script_path = PathBuf::from("ttt_solver.py");
+            if !script_path.exists() {
+                return Err(format!(
+                    "TTT enabled but {} not found. Place ttt_solver.py in the working directory.",
+                    script_path.display()
+                ));
+            }
+            solver_base.with_ttt(script_path)
+        } else {
+            solver_base
+        };
 
         let tasks_to_eval: Vec<_> = if let Some(task_id) = single_task {
             tasks.into_iter().filter(|(id, _)| id == task_id).collect()
@@ -1138,7 +1609,10 @@ mod arc {
             tasks_to_eval.len(),
             max_trials
         );
-        println!("  Engine: 8-Layer Multiplicative + Phase 3/5/6 (OCTO Braid)");
+        println!(
+            "  Engine: 8-Layer Multiplicative + Phase 3/5/6 (OCTO Braid){}",
+            if enable_ttt { " + TTT (LLM)" } else { "" }
+        );
         println!("================================================================\n");
 
         let mut total_tasks = 0;
@@ -1168,7 +1642,24 @@ mod arc {
                 }
             }
 
-            let result = evaluate_task(&mut solver, task_id, task, max_trials, verbose);
+            // Load raw task JSON for TTT bridge (if enabled)
+            let task_json: Option<serde_json::Value> = if enable_ttt {
+                let task_path = data_dir.join(split).join(format!("{}.json", task_id));
+                fs::read_to_string(&task_path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+            } else {
+                None
+            };
+
+            let result = evaluate_task(
+                &mut solver,
+                task_id,
+                task,
+                task_json.as_ref(),
+                max_trials,
+                verbose,
+            );
 
             total_tasks += 1;
             total_test_inputs += result.total;
@@ -1320,6 +1811,7 @@ mod arc {
         let mut limit: Option<usize> = None;
         let mut verbose = false;
         let mut max_trials = 2;
+        let mut enable_ttt = false;
 
         let mut i = 1;
         while i < args.len() {
@@ -1347,6 +1839,9 @@ mod arc {
                     i += 1;
                     max_trials = args[i].parse().expect("trials must be a number");
                 }
+                "--ttt" => {
+                    enable_ttt = true;
+                }
                 "--help" | "-h" => {
                     println!("Usage: arc_eval [OPTIONS]");
                     println!();
@@ -1359,6 +1854,7 @@ mod arc {
                     println!("  --limit <n>        Max tasks to evaluate");
                     println!("  --trials <n>       Max trials per test input (default: 2)");
                     println!("  --verbose, -v      Print detailed per-task output");
+                    println!("  --ttt              Enable Test-Time Training with LLM fallback");
                     println!("  --help, -h         Show this help");
                     return;
                 }
@@ -1377,6 +1873,7 @@ mod arc {
             single_task.as_deref(),
             max_trials,
             verbose,
+            enable_ttt,
         ) {
             Ok(_summary) => {}
             Err(e) => {
