@@ -339,6 +339,17 @@ mod arc {
         },
         MostCommonObjectColor,
         CopyInputToOutput,
+        OutlineObjects {
+            outline_color: u8,
+        },
+        CropToBoundingBox,
+        SwapColors {
+            a: u8,
+            b: u8,
+        },
+        RemoveSmallObjects {
+            min_size: usize,
+        },
         Custom(String),
     }
 
@@ -401,6 +412,7 @@ mod arc {
 
         // Always try identity
         hypotheses.push(Transform::Identity);
+        hypotheses.push(Transform::MostCommonObjectColor);
 
         // Geometric transforms
         hypotheses.push(Transform::FlipHorizontal);
@@ -492,6 +504,36 @@ mod arc {
             direction: Direction::Right,
         });
 
+        // OutlineObjects: infer if training pairs have a consistent outline color
+        if let Some(oc) = infer_outline_color(task) {
+            hypotheses.push(Transform::OutlineObjects { outline_color: oc });
+        }
+
+        // CropToBoundingBox: try when output is smaller than input
+        if let Some(pair) = task.train.first() {
+            let ih = pair.input.len();
+            let iw = if ih > 0 { pair.input[0].len() } else { 0 };
+            let oh = pair.output.len();
+            let ow = if oh > 0 { pair.output[0].len() } else { 0 };
+            if oh < ih || ow < iw {
+                hypotheses.push(Transform::CropToBoundingBox);
+            }
+        }
+
+        // SwapColors: try all pairs of colors seen in first training pair
+        if let Some(pair) = task.train.first() {
+            let mut colors: Vec<u8> = pair.input.iter().flatten().copied().collect::<std::collections::HashSet<_>>().into_iter().collect();
+            colors.sort();
+            for i in 0..colors.len() {
+                for j in (i+1)..colors.len() {
+                    hypotheses.push(Transform::SwapColors { a: colors[i], b: colors[j] });
+                }
+            }
+        }
+
+        // RemoveSmallObjects: try min_size 1 (single-cell noise removal)
+        hypotheses.push(Transform::RemoveSmallObjects { min_size: 2 });
+
         // Deduplicate
         let mut seen = HashSet::new();
         hypotheses.retain(|t| {
@@ -500,6 +542,45 @@ mod arc {
         });
 
         hypotheses
+    }
+
+    fn infer_outline_color(task: &ArcTask) -> Option<u8> {
+        // Find a consistent outline color across all training pairs.
+        let mut outline_color: Option<u8> = None;
+        for pair in &task.train {
+            if pair.input.len() != pair.output.len() { return None; }
+            let h = pair.input.len();
+            if h == 0 { return None; }
+            let w = pair.input[0].len();
+            if pair.output[0].len() != w { return None; }
+            let feats = analyze_grid(&pair.input);
+            let bg = feats.background_color;
+            let mut found_outline = false;
+            for r in 0..h {
+                for c in 0..w {
+                    let ic = pair.input[r][c];
+                    let oc = pair.output[r][c];
+                    if ic == bg && oc != bg {
+                        let adj = [(0i32,1i32),(0,-1),(1,0),(-1,0)];
+                        let near = adj.iter().any(|(dr,dc)| {
+                            let nr = r as i32 + dr; let nc = c as i32 + dc;
+                            nr>=0 && nr<h as i32 && nc>=0 && nc<w as i32
+                                && pair.input[nr as usize][nc as usize] != bg
+                        });
+                        if !near { return None; }
+                        match outline_color {
+                            None => { outline_color = Some(oc); found_outline = true; }
+                            Some(prev) if prev != oc => return None,
+                            _ => { found_outline = true; }
+                        }
+                    } else if ic != bg && oc != ic {
+                        return None;
+                    }
+                }
+            }
+            if !found_outline { return None; }
+        }
+        outline_color
     }
 
     fn infer_color_map(task: &ArcTask) -> Option<HashMap<u8, u8>> {
@@ -808,6 +889,143 @@ mod arc {
 
             Transform::CopyInputToOutput => Some(input.clone()),
 
+            Transform::OutlineObjects { outline_color } => {
+                let feats = analyze_grid(input);
+                let bg = feats.background_color;
+                let mut out = input.clone();
+                for r in 0..h {
+                    for c in 0..w {
+                        if input[r][c] == bg {
+                            // Check if any 4-neighbor is a non-bg object cell
+                            let adjacent = [(0i32,1),(0,-1),(1i32,0),(-1,0)];
+                            let near_obj = adjacent.iter().any(|(dr,dc)| {
+                                let nr = r as i32 + dr;
+                                let nc = c as i32 + dc;
+                                nr >= 0 && nr < h as i32 && nc >= 0 && nc < w as i32
+                                    && input[nr as usize][nc as usize] != bg
+                            });
+                            if near_obj {
+                                out[r][c] = *outline_color;
+                            }
+                        }
+                    }
+                }
+                Some(out)
+            }
+
+            Transform::CropToBoundingBox => {
+                let feats = analyze_grid(input);
+                let bg = feats.background_color;
+                let mut min_r = h;
+                let mut max_r = 0;
+                let mut min_c = w;
+                let mut max_c = 0;
+                for r in 0..h {
+                    for c in 0..w {
+                        if input[r][c] != bg {
+                            min_r = min_r.min(r);
+                            max_r = max_r.max(r);
+                            min_c = min_c.min(c);
+                            max_c = max_c.max(c);
+                        }
+                    }
+                }
+                if min_r > max_r {
+                    return None;
+                }
+                let out = (min_r..=max_r)
+                    .map(|r| input[r][min_c..=max_c].to_vec())
+                    .collect();
+                Some(out)
+            }
+
+            Transform::SwapColors { a, b } => {
+                let mut out = input.clone();
+                for row in &mut out {
+                    for c in row {
+                        if *c == *a {
+                            *c = *b;
+                        } else if *c == *b {
+                            *c = *a;
+                        }
+                    }
+                }
+                Some(out)
+            }
+
+            Transform::RemoveSmallObjects { min_size } => {
+                let feats = analyze_grid(input);
+                let bg = feats.background_color;
+                let mut visited = vec![vec![false; w]; h];
+                let mut out = input.clone();
+                for sr in 0..h {
+                    for sc in 0..w {
+                        if !visited[sr][sc] && input[sr][sc] != bg {
+                            // flood fill to get component
+                            let mut cells = Vec::new();
+                            let mut stack = vec![(sr, sc)];
+                            visited[sr][sc] = true;
+                            while let Some((cr, cc)) = stack.pop() {
+                                cells.push((cr, cc));
+                                for (dr, dc) in &[(0i32,1),(0,-1),(1i32,0),(-1,0)] {
+                                    let nr = cr as i32 + dr;
+                                    let nc = cc as i32 + dc;
+                                    if nr >= 0 && nr < h as i32 && nc >= 0 && nc < w as i32 {
+                                        let (nr, nc) = (nr as usize, nc as usize);
+                                        if !visited[nr][nc] && input[nr][nc] != bg {
+                                            visited[nr][nc] = true;
+                                            stack.push((nr, nc));
+                                        }
+                                    }
+                                }
+                            }
+                            if cells.len() < *min_size {
+                                for (r, c) in cells {
+                                    out[r][c] = bg;
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(out)
+            }
+
+            Transform::MostCommonObjectColor => {
+                // Return 1x1 grid with the most common non-background color
+                let feats = analyze_grid(input);
+                let bg = feats.background_color;
+                let mut color_counts: HashMap<u8, usize> = HashMap::new();
+                for row in input {
+                    for &c in row {
+                        if c != bg {
+                            *color_counts.entry(c).or_insert(0) += 1;
+                        }
+                    }
+                }
+                let most_common = color_counts.into_iter().max_by_key(|(_, cnt)| *cnt)?.0;
+                Some(vec![vec![most_common]])
+            }
+
+            Transform::ConditionalColorSwap {
+                condition_color,
+                swap,
+            } => {
+                // For each cell of condition_color, swap adjacent cells per the swap map
+                let mut out = input.clone();
+                for r in 0..h {
+                    for c in 0..w {
+                        if input[r][c] == *condition_color {
+                            if let Some(&new_color) = swap.get(&input[r][c]) {
+                                out[r][c] = new_color;
+                            }
+                        } else if let Some(&new_color) = swap.get(&input[r][c]) {
+                            out[r][c] = new_color;
+                        }
+                    }
+                }
+                Some(out)
+            }
+
             _ => None,
         }
     }
@@ -1082,6 +1300,35 @@ mod arc {
             // 1. Detect candidate transforms
             let candidates = detect_transforms(task);
 
+            // PRE-COG TRAINING: feed the visualization engine known-correct signals from
+            // training pairs BEFORE we score test candidates. For each training pair, find
+            // which candidate produces the exact correct output and run it through the stack
+            // so that record_outcome receives a high-confidence training signal.
+            for train_pair in &task.train {
+                for candidate in candidates.iter().take(max_trials.max(3)) {
+                    if let Some(output) = apply_transform(&train_pair.input, &candidate.transform) {
+                        let is_correct = output == train_pair.output;
+                        // Only train on correct candidates (positive examples only)
+                        // so the visualization engine calibrates toward what works.
+                        if is_correct {
+                            let cand_conf = encode_candidate_confidences(task, candidate, &candidates);
+                            // Boost pre_cognitive toward 1.0 on correct candidates
+                            let mut boosted = cand_conf.clone();
+                            boosted.pre_cognitive = 0.95;
+                            let train_state = LayerState::with_confidence(
+                                Layer::BasePhysics,
+                                boosted.clone(),
+                                boosted.base_physics,
+                            );
+                            self.stack.set_difficulty_hint(Some(0.05)); // very easy — correct answer
+                            self.stack.clear_states();
+                            let _ = self.stack.process_bidirectional(train_state);
+                            break; // one correct candidate per training pair is enough
+                        }
+                    }
+                }
+            }
+
             // 2. Process through layer system — OCTO Braid scores each candidate individually
             let mut all_results = Vec::new();
 
@@ -1124,33 +1371,41 @@ mod arc {
                             .map(|b| b.last_signals().clone())
                             .unwrap_or_default();
 
-                        if verbose {
-                            eprintln!(
-                                "      braid: cap={:.3} temp={:.3} sys2={} diff={:.2} | cand_conf={:.3}",
-                                braid.effective_cap,
-                                braid.temperature,
-                                braid.system2_active,
-                                cand_difficulty,
-                                candidate.confidence,
-                            );
-                        }
-
                         // OCTO Braid-driven score:
                         // effective_cap  → how much the braid trusts this candidate (normalized [0,1])
                         // temperature    → uncertainty penalty (lower = better)
                         // system2_active → extra scrutiny flag (slight penalty)
                         // combined_confidence → layer stack's multiplicative amplification signal
+                        // visualization_confidence → pre-cognitive prediction calibrated by fidelity
                         let braid_cap_score = braid.effective_cap / 2.0;
                         let temp_penalty = 1.0 / (1.0 + braid.temperature * 0.3);
                         let sys2_penalty = if braid.system2_active { 0.9 } else { 1.0 };
                         let layer_score = (result.combined_confidence / 2.0).min(1.0);
+                        let viz_score = result.visualization
+                            .as_ref()
+                            .map(|v| v.visualization_confidence)
+                            .unwrap_or(0.5);
 
-                        // Primary: candidate training accuracy (ground truth)
-                        // Secondary: braid cap × temp × sys2 (live OCTO signal)
-                        // Tertiary: layer stack multiplicative output
-                        let combined_score = candidate.confidence * 0.55
-                            + braid_cap_score * temp_penalty * sys2_penalty * 0.30
-                            + layer_score * 0.15;
+                        if verbose {
+                            eprintln!(
+                                "      braid: cap={:.3} temp={:.3} sys2={} diff={:.2} | cand={:.3} viz={:.3}",
+                                braid.effective_cap,
+                                braid.temperature,
+                                braid.system2_active,
+                                cand_difficulty,
+                                candidate.confidence,
+                                viz_score,
+                            );
+                        }
+
+                        // Primary:   candidate training accuracy (ground truth)       50%
+                        // Secondary: braid cap × temp × sys2 (live OCTO signal)       25%
+                        // Tertiary:  pre-cog visualization (fidelity-calibrated)       15%
+                        // Layer:     stack multiplicative output                       10%
+                        let combined_score = candidate.confidence * 0.50
+                            + braid_cap_score * temp_penalty * sys2_penalty * 0.25
+                            + viz_score * 0.15
+                            + layer_score * 0.10;
 
                         trial_results.push((output, combined_score));
                     }
