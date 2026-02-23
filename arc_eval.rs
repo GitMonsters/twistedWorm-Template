@@ -350,7 +350,28 @@ mod arc {
         RemoveSmallObjects {
             min_size: usize,
         },
+        ExtractLargestObject,
+        HollowObjects {
+            hollow_color: u8,
+        },
+        RecolorBySize {
+            color_order: Vec<u8>,
+        },
+        ConnectDots {
+            line_color: u8,
+        },
+        HalfGrid {
+            half: GridHalf,
+        },
         Custom(String),
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum GridHalf {
+        Top,
+        Bottom,
+        Left,
+        Right,
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -533,6 +554,70 @@ mod arc {
 
         // RemoveSmallObjects: try min_size 1 (single-cell noise removal)
         hypotheses.push(Transform::RemoveSmallObjects { min_size: 2 });
+
+        // ExtractLargestObject: try when output is smaller than input
+        if let Some(pair) = task.train.first() {
+            let ih = pair.input.len();
+            let iw = if ih > 0 { pair.input[0].len() } else { 0 };
+            let oh = pair.output.len();
+            let ow = if oh > 0 { pair.output[0].len() } else { 0 };
+            if oh <= ih && ow <= iw {
+                hypotheses.push(Transform::ExtractLargestObject);
+            }
+        }
+
+        // HollowObjects: try when output has interior cells removed
+        {
+            let feats = task.train.first().map(|p| analyze_grid(&p.output));
+            if let Some(f) = feats {
+                if f.colors.len() <= 3 {
+                    // Try each non-bg color as hollow_color
+                    for &c in &f.colors {
+                        hypotheses.push(Transform::HollowObjects { hollow_color: c });
+                    }
+                }
+            }
+        }
+
+        // RecolorBySize: when output has same objects but different colors
+        if let Some(pair) = task.train.first() {
+            if pair.input.len() == pair.output.len() {
+                let out_feats = analyze_grid(&pair.output);
+                let mut colors: Vec<u8> = out_feats.colors.iter()
+                    .filter(|&&c| c != out_feats.background_color)
+                    .copied().collect();
+                colors.sort();
+                if colors.len() >= 2 && colors.len() <= 5 {
+                    hypotheses.push(Transform::RecolorBySize { color_order: colors });
+                }
+            }
+        }
+
+        // ConnectDots: when output has lines connecting same-color cells
+        if let Some(pair) = task.train.first() {
+            if pair.input.len() == pair.output.len() {
+                let in_feats = analyze_grid(&pair.input);
+                for &c in &in_feats.colors {
+                    if c != in_feats.background_color {
+                        hypotheses.push(Transform::ConnectDots { line_color: c });
+                    }
+                }
+            }
+        }
+
+        // HalfGrid: try all four halves when output is half the size
+        if let Some(pair) = task.train.first() {
+            let ih = pair.input.len();
+            let iw = if ih > 0 { pair.input[0].len() } else { 0 };
+            let oh = pair.output.len();
+            let ow = if oh > 0 { pair.output[0].len() } else { 0 };
+            if (oh == ih / 2 && ow == iw) || (oh == ih && ow == iw / 2) || (oh <= ih && ow <= iw) {
+                hypotheses.push(Transform::HalfGrid { half: GridHalf::Top });
+                hypotheses.push(Transform::HalfGrid { half: GridHalf::Bottom });
+                hypotheses.push(Transform::HalfGrid { half: GridHalf::Left });
+                hypotheses.push(Transform::HalfGrid { half: GridHalf::Right });
+            }
+        }
 
         // Deduplicate
         let mut seen = HashSet::new();
@@ -1024,6 +1109,160 @@ mod arc {
                     }
                 }
                 Some(out)
+            }
+
+            Transform::ExtractLargestObject => {
+                let feats = analyze_grid(input);
+                let bg = feats.background_color;
+                let mut visited = vec![vec![false; w]; h];
+                let mut best_cells: Vec<(usize, usize)> = Vec::new();
+                for sr in 0..h {
+                    for sc in 0..w {
+                        if !visited[sr][sc] && input[sr][sc] != bg {
+                            let mut cells = Vec::new();
+                            let mut stack = vec![(sr, sc)];
+                            visited[sr][sc] = true;
+                            while let Some((cr, cc)) = stack.pop() {
+                                cells.push((cr, cc));
+                                for (dr, dc) in &[(0i32,1),(0,-1),(1i32,0),(-1,0)] {
+                                    let nr = cr as i32 + dr;
+                                    let nc = cc as i32 + dc;
+                                    if nr >= 0 && nr < h as i32 && nc >= 0 && nc < w as i32 {
+                                        let (nr, nc) = (nr as usize, nc as usize);
+                                        if !visited[nr][nc] && input[nr][nc] != bg {
+                                            visited[nr][nc] = true;
+                                            stack.push((nr, nc));
+                                        }
+                                    }
+                                }
+                            }
+                            if cells.len() > best_cells.len() {
+                                best_cells = cells;
+                            }
+                        }
+                    }
+                }
+                if best_cells.is_empty() { return None; }
+                let min_r = best_cells.iter().map(|(r,_)| *r).min().unwrap();
+                let max_r = best_cells.iter().map(|(r,_)| *r).max().unwrap();
+                let min_c = best_cells.iter().map(|(_,c)| *c).min().unwrap();
+                let max_c = best_cells.iter().map(|(_,c)| *c).max().unwrap();
+                let out = (min_r..=max_r)
+                    .map(|r| input[r][min_c..=max_c].to_vec())
+                    .collect();
+                Some(out)
+            }
+
+            Transform::HollowObjects { hollow_color } => {
+                let feats = analyze_grid(input);
+                let bg = feats.background_color;
+                let mut out = input.clone();
+                for r in 0..h {
+                    for c in 0..w {
+                        if input[r][c] == *hollow_color {
+                            // Cell is interior if all 4 neighbors are non-bg
+                            let is_interior = [(0i32,1),(0,-1),(1i32,0),(-1,0)].iter().all(|(dr,dc)| {
+                                let nr = r as i32 + dr;
+                                let nc = c as i32 + dc;
+                                nr >= 0 && nr < h as i32 && nc >= 0 && nc < w as i32
+                                    && input[nr as usize][nc as usize] != bg
+                            });
+                            if is_interior {
+                                out[r][c] = bg;
+                            }
+                        }
+                    }
+                }
+                Some(out)
+            }
+
+            Transform::RecolorBySize { color_order } => {
+                // Find all connected objects, sort by size, assign colors in order
+                let feats = analyze_grid(input);
+                let bg = feats.background_color;
+                let mut visited = vec![vec![false; w]; h];
+                let mut objects: Vec<Vec<(usize, usize)>> = Vec::new();
+                for sr in 0..h {
+                    for sc in 0..w {
+                        if !visited[sr][sc] && input[sr][sc] != bg {
+                            let mut cells = Vec::new();
+                            let mut stack = vec![(sr, sc)];
+                            visited[sr][sc] = true;
+                            while let Some((cr, cc)) = stack.pop() {
+                                cells.push((cr, cc));
+                                for (dr, dc) in &[(0i32,1),(0,-1),(1i32,0),(-1,0)] {
+                                    let nr = cr as i32 + dr;
+                                    let nc = cc as i32 + dc;
+                                    if nr >= 0 && nr < h as i32 && nc >= 0 && nc < w as i32 {
+                                        let (nr, nc) = (nr as usize, nc as usize);
+                                        if !visited[nr][nc] && input[nr][nc] != bg {
+                                            visited[nr][nc] = true;
+                                            stack.push((nr, nc));
+                                        }
+                                    }
+                                }
+                            }
+                            objects.push(cells);
+                        }
+                    }
+                }
+                // Sort smallest→largest
+                objects.sort_by_key(|o| o.len());
+                let mut out = vec![vec![bg; w]; h];
+                for (i, obj) in objects.iter().enumerate() {
+                    let color = color_order.get(i).copied().unwrap_or(*color_order.last().unwrap_or(&1));
+                    for &(r, c) in obj {
+                        out[r][c] = color;
+                    }
+                }
+                Some(out)
+            }
+
+            Transform::ConnectDots { line_color } => {
+                // Draw straight horizontal+vertical lines connecting all cells of line_color
+                let mut out = input.clone();
+                // Collect all positions of line_color
+                let dots: Vec<(usize, usize)> = (0..h)
+                    .flat_map(|r| (0..w).filter_map(move |c| {
+                        if input[r][c] == *line_color { Some((r, c)) } else { None }
+                    }))
+                    .collect();
+                // Connect dots sharing the same row or column
+                for i in 0..dots.len() {
+                    for j in (i+1)..dots.len() {
+                        let (r1, c1) = dots[i];
+                        let (r2, c2) = dots[j];
+                        if r1 == r2 {
+                            let (cmin, cmax) = if c1 < c2 { (c1, c2) } else { (c2, c1) };
+                            for c in cmin..=cmax { out[r1][c] = *line_color; }
+                        } else if c1 == c2 {
+                            let (rmin, rmax) = if r1 < r2 { (r1, r2) } else { (r2, r1) };
+                            for r in rmin..=rmax { out[r][c1] = *line_color; }
+                        }
+                    }
+                }
+                Some(out)
+            }
+
+            Transform::HalfGrid { half } => {
+                match half {
+                    GridHalf::Top => {
+                        let half_h = (h + 1) / 2;
+                        Some(input[..half_h].to_vec())
+                    }
+                    GridHalf::Bottom => {
+                        let half_h = h / 2;
+                        Some(input[half_h..].to_vec())
+                    }
+                    GridHalf::Left => {
+                        let half_w = (w + 1) / 2;
+                        Some(input.iter().map(|row| row[..half_w].to_vec()).collect())
+                    }
+                    GridHalf::Right => {
+                        let half_w = w / 2;
+                        Some(input.iter().map(|row| row[half_w..].to_vec()).collect())
+                    }
+                }
             }
 
             _ => None,
